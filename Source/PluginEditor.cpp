@@ -14,12 +14,11 @@ KorgKMPEngineEditor::KorgKMPEngineEditor(KorgKMPEngineProcessor& p)
       midiKeyboard(p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard) {
 
     // --- Left Sidebar: Sound Browser ---
-    browserTitleLabel.setText("SOUND BROWSER", juce::dontSendNotification);
+    browserTitleLabel.setText("PA800 / KMP BROWSER", juce::dontSendNotification);
     browserTitleLabel.setFont(juce::FontOptions(13.0f, juce::Font::bold));
     browserTitleLabel.setColour(juce::Label::textColourId, goldAccent);
     addAndMakeVisible(browserTitleLabel);
 
-    folderNameLabel.setText(processor.currentFolderName, juce::dontSendNotification);
     folderNameLabel.setFont(juce::FontOptions(12.0f));
     folderNameLabel.setColour(juce::Label::textColourId, textMuted);
     addAndMakeVisible(folderNameLabel);
@@ -28,14 +27,15 @@ KorgKMPEngineEditor::KorgKMPEngineEditor(KorgKMPEngineProcessor& p)
     openFolderButton.setColour(juce::TextButton::textColourOffId, juce::Colours::black);
     openFolderButton.onClick = [this] {
         fileChooser = std::make_unique<juce::FileChooser>(
-            "Select Korg Set or Multisample Folder",
+            "Select PA800 .SET Folder or KMP Folder",
             juce::File::getSpecialLocation(juce::File::userDesktopDirectory)
         );
         auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories;
         fileChooser->launchAsync(flags, [this](const juce::FileChooser& fc) {
             auto dir = fc.getResult();
             if (dir.isDirectory()) {
-                processor.scanFolderForKMP(dir);
+                processor.scanFolder(dir);
+                searchBox.setText("", juce::dontSendNotification);
                 syncBrowserAndStatus();
             }
         });
@@ -59,20 +59,32 @@ KorgKMPEngineEditor::KorgKMPEngineEditor(KorgKMPEngineProcessor& p)
         syncBrowserAndStatus();
     };
 
+    searchBox.setTextToShowWhenEmpty("Search sound or RAM01...", textMuted);
+    searchBox.setText(processor.searchQuery, juce::dontSendNotification);
+    searchBox.setColour(juce::TextEditor::backgroundColourId, bgDark);
+    searchBox.setColour(juce::TextEditor::textColourId, textLight);
+    searchBox.setColour(juce::TextEditor::outlineColourId, goldAccent.withAlpha(0.35f));
+    searchBox.setColour(juce::TextEditor::focusedOutlineColourId, goldAccent);
+    searchBox.onTextChange = [this] {
+        processor.applySearchFilter(searchBox.getText());
+        syncBrowserAndStatus();
+    };
+    addAndMakeVisible(searchBox);
+
     soundListBox.setModel(this);
-    soundListBox.setRowHeight(28);
+    soundListBox.setRowHeight(26);
     soundListBox.setColour(juce::ListBox::backgroundColourId, bgDark);
     soundListBox.setColour(juce::ListBox::outlineColourId, goldAccent.withAlpha(0.25f));
     soundListBox.setOutlineThickness(1);
     addAndMakeVisible(soundListBox);
 
     // --- Header ---
-    titleLabel.setText("MIDO MAZZIKA // KORG KMP ENGINE", juce::dontSendNotification);
-    titleLabel.setFont(juce::FontOptions(18.0f, juce::Font::bold));
+    titleLabel.setText("MIDO MAZZIKA // KORG PA & KMP ENGINE", juce::dontSendNotification);
+    titleLabel.setFont(juce::FontOptions(17.0f, juce::Font::bold));
     titleLabel.setColour(juce::Label::textColourId, goldAccent);
     addAndMakeVisible(titleLabel);
 
-    statusLabel.setFont(juce::FontOptions(14.0f));
+    statusLabel.setFont(juce::FontOptions(13.5f));
     statusLabel.setColour(juce::Label::textColourId, textLight);
     addAndMakeVisible(statusLabel);
 
@@ -80,15 +92,16 @@ KorgKMPEngineEditor::KorgKMPEngineEditor(KorgKMPEngineProcessor& p)
     loadButton.setColour(juce::TextButton::textColourOffId, goldAccent);
     loadButton.onClick = [this] {
         fileChooser = std::make_unique<juce::FileChooser>(
-            "Select Korg Multisample (.KMP)",
+            "Select PA800 (.PCM) or Korg (.KMP) File",
             juce::File::getSpecialLocation(juce::File::userDesktopDirectory),
-            "*.kmp;*.KMP"
+            "*.pcm;*.PCM;*.kmp;*.KMP"
         );
         auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
         fileChooser->launchAsync(flags, [this](const juce::FileChooser& fc) {
             auto file = fc.getResult();
             if (file.existsAsFile()) {
-                processor.loadSingleKMPWithSiblings(file);
+                processor.loadSingleFile(file);
+                searchBox.setText("", juce::dontSendNotification);
                 syncBrowserAndStatus();
             }
         });
@@ -179,16 +192,18 @@ KorgKMPEngineEditor::KorgKMPEngineEditor(KorgKMPEngineProcessor& p)
     addAndMakeVisible(midiKeyboard);
 
     syncBrowserAndStatus();
-    setSize(980, 450);
+    setSize(1000, 460);
 }
 
 int KorgKMPEngineEditor::getNumRows() {
-    return static_cast<int>(processor.kmpFiles.size());
+    return static_cast<int>(processor.filteredIndices.size());
 }
 
 void KorgKMPEngineEditor::paintListBoxItem(int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected) {
-    if (rowNumber < 0 || rowNumber >= static_cast<int>(processor.kmpFiles.size()))
+    if (rowNumber < 0 || rowNumber >= static_cast<int>(processor.filteredIndices.size()))
         return;
+
+    const auto& entry = processor.allSounds[static_cast<size_t>(processor.filteredIndices[static_cast<size_t>(rowNumber)])];
 
     if (rowIsSelected) {
         g.fillAll(goldAccent);
@@ -196,39 +211,38 @@ void KorgKMPEngineEditor::paintListBoxItem(int rowNumber, juce::Graphics& g, int
         g.fillAll(rowNumber % 2 == 0 ? panelDark : rowAltDark);
     }
 
-    juce::String indexStr = juce::String(rowNumber + 1).paddedLeft('0', 2) + ". ";
-    juce::String nameStr = processor.kmpFiles[static_cast<size_t>(rowNumber)].getFileNameWithoutExtension();
-
-    g.setFont(juce::FontOptions(13.0f, rowIsSelected ? juce::Font::bold : juce::Font::plain));
-    g.setColour(rowIsSelected ? juce::Colours::black : goldAccent);
-    g.drawText(indexStr, 8, 0, 28, height, juce::Justification::centredLeft, false);
-
+    g.setFont(juce::FontOptions(12.5f, rowIsSelected ? juce::Font::bold : juce::Font::plain));
     g.setColour(rowIsSelected ? juce::Colours::black : textLight);
-    g.drawText(nameStr, 36, 0, width - 42, height, juce::Justification::centredLeft, true);
+    g.drawText(entry.displayName, 8, 0, width - 64, height, juce::Justification::centredLeft, true);
+
+    g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+    g.setColour(rowIsSelected ? juce::Colours::black.withAlpha(0.75f) : goldAccent.withAlpha(0.85f));
+    g.drawText(entry.bankTag, width - 56, 0, 50, height, juce::Justification::centredRight, true);
 }
 
 void KorgKMPEngineEditor::selectedRowsChanged(int lastRowSelected) {
     if (isUpdatingSelection) return;
-    if (lastRowSelected >= 0 && lastRowSelected < static_cast<int>(processor.kmpFiles.size())) {
-        processor.selectSoundByIndex(lastRowSelected);
-        statusLabel.setText(processor.loadedInstrumentName + " (" + juce::String(processor.loadedZonesCount) + " Zones)",
+    if (lastRowSelected >= 0 && lastRowSelected < static_cast<int>(processor.filteredIndices.size())) {
+        processor.selectFilteredIndex(lastRowSelected);
+        statusLabel.setText(processor.loadedInstrumentName + "  (" + processor.loadedDetails + ")",
                             juce::dontSendNotification);
     }
 }
 
 void KorgKMPEngineEditor::syncBrowserAndStatus() {
     isUpdatingSelection = true;
-    folderNameLabel.setText(processor.currentFolderName + " (" + juce::String(processor.kmpFiles.size()) + ")",
+    folderNameLabel.setText(processor.currentFolderName + " (" + juce::String(processor.filteredIndices.size()) + " / "
+                            + juce::String(processor.allSounds.size()) + ")",
                             juce::dontSendNotification);
     soundListBox.updateContent();
 
-    if (processor.currentSoundIndex >= 0 && processor.currentSoundIndex < static_cast<int>(processor.kmpFiles.size())) {
-        soundListBox.selectRow(processor.currentSoundIndex);
-        soundListBox.scrollToEnsureRowIsOnscreen(processor.currentSoundIndex);
+    if (processor.currentFilteredRow >= 0 && processor.currentFilteredRow < static_cast<int>(processor.filteredIndices.size())) {
+        soundListBox.selectRow(processor.currentFilteredRow);
+        soundListBox.scrollToEnsureRowIsOnscreen(processor.currentFilteredRow);
     }
     soundListBox.repaint();
 
-    statusLabel.setText(processor.loadedInstrumentName + " (" + juce::String(processor.loadedZonesCount) + " Zones)",
+    statusLabel.setText(processor.loadedInstrumentName + "  (" + processor.loadedDetails + ")",
                         juce::dontSendNotification);
     isUpdatingSelection = false;
 }
@@ -252,11 +266,11 @@ void KorgKMPEngineEditor::paint(juce::Graphics& g) {
 
     // Left Sidebar Panel
     g.setColour(panelDark);
-    g.fillRoundedRectangle(12.0f, 12.0f, 232.0f, getHeight() - 24.0f, 6.0f);
+    g.fillRoundedRectangle(12.0f, 12.0f, 252.0f, getHeight() - 24.0f, 6.0f);
     g.setColour(goldAccent.withAlpha(0.3f));
-    g.drawRoundedRectangle(12.0f, 12.0f, 232.0f, getHeight() - 24.0f, 6.0f, 1.0f);
+    g.drawRoundedRectangle(12.0f, 12.0f, 252.0f, getHeight() - 24.0f, 6.0f, 1.0f);
 
-    const float mainX = 256.0f;
+    const float mainX = 276.0f;
     const float mainW = getWidth() - mainX - 12.0f;
 
     // Top Header Bar
@@ -280,20 +294,21 @@ void KorgKMPEngineEditor::paint(juce::Graphics& g) {
 
 void KorgKMPEngineEditor::resized() {
     // Sidebar layout
-    browserTitleLabel.setBounds(20, 16, 216, 20);
-    openFolderButton.setBounds(20, 40, 148, 28);
-    prevSoundButton.setBounds(174, 40, 28, 28);
-    nextSoundButton.setBounds(206, 40, 28, 28);
-    folderNameLabel.setBounds(20, 72, 216, 18);
-    soundListBox.setBounds(20, 94, 216, getHeight() - 114);
+    browserTitleLabel.setBounds(20, 16, 236, 20);
+    openFolderButton.setBounds(20, 40, 168, 28);
+    prevSoundButton.setBounds(194, 40, 28, 28);
+    nextSoundButton.setBounds(226, 40, 28, 28);
+    searchBox.setBounds(20, 74, 236, 26);
+    folderNameLabel.setBounds(20, 104, 236, 18);
+    soundListBox.setBounds(20, 124, 236, getHeight() - 144);
 
     // Right main area
-    const int mainX = 256;
+    const int mainX = 276;
     const int mainW = getWidth() - mainX - 12;
 
-    titleLabel.setBounds(mainX + 12, 16, 380, 24);
-    statusLabel.setBounds(mainX + 12, 40, 450, 22);
-    loadButton.setBounds(getWidth() - 140, 22, 116, 36);
+    titleLabel.setBounds(mainX + 12, 16, 440, 24);
+    statusLabel.setBounds(mainX + 12, 40, 520, 22);
+    loadButton.setBounds(getWidth() - 134, 22, 110, 36);
 
     // Presets row
     int px = getWidth() - 340;
@@ -325,5 +340,5 @@ void KorgKMPEngineEditor::resized() {
     layoutKnob(releaseLabel, releaseSlider, knobStartX + knobSpacing * 2);
     layoutKnob(gainLabel, gainSlider, knobStartX + knobSpacing * 3);
 
-    midiKeyboard.setBounds(mainX, 332, mainW, 106);
+    midiKeyboard.setBounds(mainX, 332, mainW, 116);
 }
