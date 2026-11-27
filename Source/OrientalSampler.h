@@ -58,7 +58,6 @@ public:
         adsr.setParameters(adsrParams);
 
         if (state.monoMode.load() && wasPlaying) {
-            // Legato / Glide transition without retriggering from zero
             noteSmoothed.reset(getSampleRate(), state.glideTimeSec.load());
             noteSmoothed.setTargetValue(static_cast<double>(midiNoteNumber));
         } else {
