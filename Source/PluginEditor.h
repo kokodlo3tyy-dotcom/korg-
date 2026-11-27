@@ -28,13 +28,14 @@ private:
     // Left Sidebar: Sound Browser
     juce::Label browserTitleLabel;
     juce::Label folderNameLabel;
-    juce::TextButton openFolderButton { "OPEN FOLDER" };
+    juce::TextButton openFolderButton { "OPEN SET / FOLDER" };
     juce::TextButton prevSoundButton { "<" };
     juce::TextButton nextSoundButton { ">" };
+    juce::TextEditor searchBox;
     juce::ListBox soundListBox;
 
     // Main Top Header
-    juce::TextButton loadButton { "LOAD .KMP" };
+    juce::TextButton loadButton { "LOAD FILE" };
     juce::Label titleLabel;
     juce::Label statusLabel;
 
