@@ -32,7 +32,6 @@ struct PA800SampleInfo {
 
 class KorgParser {
 public:
-    // Checks if a .KMP file is a Korg PA KORF/OC31 container (not standard Triton KMP)
     static bool isKorfFile(const juce::File& file) {
         juce::FileInputStream stream(file);
         if (!stream.openedOk()) return false;
@@ -41,64 +40,47 @@ public:
         return header[0] == 0x01 && std::memcmp(header + 23, "KORF", 4) == 0;
     }
 
-    // Fast TOC scan of a PA800 .PCM file (reads only the 0x05 directory chunk)
+    // Fast TOC scan of a PA800 .PCM file (reads header + embedded 0x05 TOC block)
     static std::vector<PA800SampleInfo> scanPA800PCM(const juce::File& pcmFile) {
         std::vector<PA800SampleInfo> list;
         juce::FileInputStream stream(pcmFile);
         if (!stream.openedOk()) return list;
 
-        uint8_t containerHdr[8] = { 0 };
-        if (stream.read(containerHdr, 8) < 8 || containerHdr[0] != 0x01)
+        uint8_t head[64] = { 0 };
+        if (stream.read(head, 64) < 36) return list;
+
+        // Verify KORF signature at offset 0x17 (23) and TOC marker 0x05 at offset 0x1C (28)
+        if (head[0] != 0x01 || std::memcmp(head + 23, "KORF", 4) != 0)
             return list;
 
-        bool isKorf = false;
-        while (!stream.isExhausted()) {
-            uint8_t chunkHdr[8] = { 0 };
-            if (stream.read(chunkHdr, 8) < 8) break;
+        // TOC size is stored as 32-bit Big-Endian at offset 0x20 (32)
+        uint32_t tocSize = juce::ByteOrder::bigEndianInt(head + 32);
+        if (tocSize < 24 || tocSize > 262144)
+            return list;
 
-            uint8_t chunkType = chunkHdr[0];
-            uint32_t chunkSize = juce::ByteOrder::bigEndianInt(chunkHdr + 4);
-            juce::int64 nextPos = stream.getPosition() + static_cast<juce::int64>(chunkSize);
+        // TOC entries start at offset 0x24 (36)
+        stream.setPosition(36);
+        juce::MemoryBlock toc(tocSize);
+        if (stream.read(toc.getData(), static_cast<int>(tocSize)) != static_cast<int>(tocSize))
+            return list;
 
-            if (chunkType == 0x02 && chunkSize >= 11 && chunkSize <= 256) {
-                juce::MemoryBlock mb(chunkSize);
-                if (stream.read(mb.getData(), static_cast<int>(chunkSize)) == static_cast<int>(chunkSize)) {
-                    const char* p = static_cast<const char*>(mb.getData());
-                    for (size_t i = 0; i + 4 <= chunkSize; ++i) {
-                        if (std::memcmp(p + i, "KORF", 4) == 0) {
-                            isKorf = true;
-                            break;
-                        }
-                    }
-                }
-            } else if (chunkType == 0x05 && isKorf && chunkSize >= 24 && chunkSize <= 262144) {
-                juce::MemoryBlock toc(chunkSize);
-                if (stream.read(toc.getData(), static_cast<int>(chunkSize)) == static_cast<int>(chunkSize)) {
-                    const uint8_t* ptr = static_cast<const uint8_t*>(toc.getData());
-                    int count = static_cast<int>(chunkSize / 24);
-                    list.reserve(static_cast<size_t>(count));
+        const uint8_t* ptr = static_cast<const uint8_t*>(toc.getData());
+        int count = static_cast<int>(tocSize / 24);
+        list.reserve(static_cast<size_t>(count));
 
-                    for (int i = 0; i < count; ++i) {
-                        char nameBuf[17] = { 0 };
-                        std::memcpy(nameBuf, ptr + (i * 24), 16);
-                        for (int c = 0; c < 16; ++c) {
-                            if (nameBuf[c] == '\0') break;
-                            unsigned char ch = static_cast<unsigned char>(nameBuf[c]);
-                            if (ch < 32 || ch > 126) nameBuf[c] = ' ';
-                        }
-                        juce::String sName = juce::String(nameBuf).trim();
-                        if (sName.isEmpty())
-                            sName = "Sample " + juce::String(i + 1);
-
-                        list.push_back({ sName, i });
-                    }
-                }
-                break; // Found TOC, stop reading immediately
+        for (int i = 0; i < count; ++i) {
+            char nameBuf[17] = { 0 };
+            std::memcpy(nameBuf, ptr + (i * 24), 16);
+            for (int c = 0; c < 16; ++c) {
+                if (nameBuf[c] == '\0') break;
+                unsigned char ch = static_cast<unsigned char>(nameBuf[c]);
+                if (ch < 32 || ch > 126) nameBuf[c] = ' ';
             }
+            juce::String sName = juce::String(nameBuf).trim();
+            if (sName.isEmpty())
+                sName = "Sample " + juce::String(i + 1);
 
-            if (nextPos <= stream.getPosition() || nextPos > stream.getTotalLength())
-                break;
-            stream.setPosition(nextPos);
+            list.push_back({ sName, i });
         }
 
         return list;
@@ -142,7 +124,7 @@ public:
                             KorgSampleZone zone;
                             zone.sampleName = displayName;
                             zone.sampleRate = (rawSR >= 4000 && rawSR <= 192000) ? static_cast<double>(rawSR) : 44100.0;
-                            zone.rootNote = 60; // Middle C
+                            zone.rootNote = 60;
                             zone.lowNote = 0;
                             zone.highNote = 127;
 
@@ -195,7 +177,6 @@ public:
         return result;
     }
 
-    // Standard Korg Triton .KSF loader
     static bool loadKSF(const juce::File& ksfFile, KorgSampleZone& zone) {
         if (!ksfFile.existsAsFile()) return false;
 
@@ -266,7 +247,6 @@ public:
         return false;
     }
 
-    // Standard Korg Triton .KMP loader
     static KorgMultisample loadKMP(const juce::File& kmpFile) {
         KorgMultisample result;
         if (!kmpFile.existsAsFile()) return result;
