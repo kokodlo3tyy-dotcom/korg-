@@ -110,6 +110,9 @@ public:
         int numZones = 0;
         juce::File parentDir = kmpFile.getParentDirectory();
         juce::File subDir = parentDir.getChildFile(kmpFile.getFileNameWithoutExtension());
+        // دعم بنية سيتات PA (فولدر MULTISMP وبجانبه فولدر PCM)
+        juce::File pcmDir = parentDir.getParentDirectory().getChildFile("PCM");
+        juce::File pcmSubDir = pcmDir.getChildFile(kmpFile.getFileNameWithoutExtension());
 
         while (offset + 8 <= size) {
             juce::String chunkID(reinterpret_cast<const char*>(ptr + offset), 4);
@@ -145,8 +148,9 @@ public:
                         zone.ksfFileName = rawName;
 
                         juce::File ksfFile = parentDir.getChildFile(rawName);
-                        if (!ksfFile.existsAsFile())
-                            ksfFile = subDir.getChildFile(rawName);
+                        if (!ksfFile.existsAsFile()) ksfFile = subDir.getChildFile(rawName);
+                        if (!ksfFile.existsAsFile()) ksfFile = pcmDir.getChildFile(rawName);
+                        if (!ksfFile.existsAsFile()) ksfFile = pcmSubDir.getChildFile(rawName);
 
                         if (loadKSF(ksfFile, zone)) {
                             result.zones.push_back(std::move(zone));
