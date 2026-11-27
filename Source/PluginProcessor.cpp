@@ -24,11 +24,17 @@ bool KorgKMPEngineProcessor::isBusesLayoutSupported(const BusesLayout& layouts) 
         || layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
 }
 
-bool KorgKMPEngineProcessor::loadKMPFile(const juce::File& file) {
-    auto kmp = KorgParser::loadKMP(file);
-    if (!kmp.isValid) {
-        loadedInstrumentName = "Error loading KSF: " + file.getFileNameWithoutExtension();
-        loadedZonesCount = 0;
+bool KorgKMPEngineProcessor::loadSoundEntry(const SoundEntry& entry) {
+    KorgMultisample ms;
+    if (entry.type == SoundEntry::Type::PA800_PCM) {
+        ms = KorgParser::loadPA800Sample(entry.file, entry.sampleIndex, entry.displayName);
+    } else {
+        ms = KorgParser::loadKMP(entry.file);
+    }
+
+    if (!ms.isValid) {
+        loadedInstrumentName = "Load Error: " + entry.displayName;
+        loadedDetails = "0 Zones";
         return false;
     }
 
@@ -36,85 +42,163 @@ bool KorgKMPEngineProcessor::loadKMPFile(const juce::File& file) {
     synth.allNotesOff(0, false);
     synth.clearSounds();
 
-    for (auto& zone : kmp.zones) {
+    int sr = static_cast<int>(ms.zones[0].sampleRate);
+    bool looped = ms.zones[0].hasLoop;
+    int zoneCount = static_cast<int>(ms.zones.size());
+
+    for (auto& zone : ms.zones) {
         synth.addSound(new KorgSamplerSound(std::move(zone)));
     }
 
-    loadedInstrumentName = kmp.name.isNotEmpty() ? kmp.name : file.getFileNameWithoutExtension();
-    loadedZonesCount = static_cast<int>(kmp.zones.size());
+    loadedInstrumentName = ms.name.isNotEmpty() ? ms.name : entry.displayName;
+    if (entry.type == SoundEntry::Type::PA800_PCM) {
+        loadedDetails = entry.bankTag + " | " + juce::String(sr) + " Hz | " + (looped ? "LOOP" : "ONE-SHOT");
+    } else {
+        loadedDetails = juce::String(zoneCount) + " Zones | " + juce::String(sr) + " Hz";
+    }
     return true;
 }
 
-bool KorgKMPEngineProcessor::loadSingleKMPWithSiblings(const juce::File& file) {
-    juce::File parent = file.getParentDirectory();
-    kmpFiles.clear();
-    currentFolderName = parent.getFileName();
+bool KorgKMPEngineProcessor::loadSingleFile(const juce::File& file) {
+    if (!file.existsAsFile()) return false;
 
-    juce::Array<juce::File> found;
-    parent.findChildFiles(found, juce::File::findFiles, false, "*.kmp");
+    allSounds.clear();
+    searchQuery.clear();
+    currentFolderName = file.getFileName();
 
-    for (const auto& f : found)
-        kmpFiles.push_back(f);
+    if (file.hasFileExtension(".pcm")) {
+        auto samples = KorgParser::scanPA800PCM(file);
+        juce::String bank = file.getFileNameWithoutExtension();
+        for (const auto& s : samples) {
+            allSounds.push_back({ SoundEntry::Type::PA800_PCM, file, s.indexInFile, s.name, bank });
+        }
+    } else {
+        juce::File parent = file.getParentDirectory();
+        currentFolderName = parent.getFileName();
+        juce::Array<juce::File> found;
+        parent.findChildFiles(found, juce::File::findFiles, false, "*.kmp");
 
-    std::sort(kmpFiles.begin(), kmpFiles.end(), [](const juce::File& a, const juce::File& b) {
-        return a.getFileName().compareNatural(b.getFileName()) < 0;
-    });
+        std::vector<juce::File> sorted;
+        for (const auto& f : found) sorted.push_back(f);
+        std::sort(sorted.begin(), sorted.end(), [](const juce::File& a, const juce::File& b) {
+            return a.getFileName().compareNatural(b.getFileName()) < 0;
+        });
 
-    currentSoundIndex = -1;
-    for (int i = 0; i < static_cast<int>(kmpFiles.size()); ++i) {
-        if (kmpFiles[static_cast<size_t>(i)] == file) {
-            currentSoundIndex = i;
-            break;
+        for (const auto& f : sorted) {
+            if (!KorgParser::isKorfFile(f)) {
+                allSounds.push_back({ SoundEntry::Type::KMP, f, 0, f.getFileNameWithoutExtension(), "KMP" });
+            }
         }
     }
 
-    return loadKMPFile(file);
+    applySearchFilter("");
+
+    if (!filteredIndices.empty()) {
+        int targetRow = 0;
+        for (int i = 0; i < static_cast<int>(filteredIndices.size()); ++i) {
+            if (allSounds[static_cast<size_t>(filteredIndices[static_cast<size_t>(i)])].file == file) {
+                targetRow = i;
+                break;
+            }
+        }
+        return selectFilteredIndex(targetRow);
+    }
+
+    loadedInstrumentName = "No playable sounds found";
+    loadedDetails = "Select a PA800 .PCM file or open .SET folder";
+    return false;
 }
 
-void KorgKMPEngineProcessor::scanFolderForKMP(const juce::File& folder) {
+void KorgKMPEngineProcessor::scanFolder(const juce::File& folder) {
     if (!folder.isDirectory()) return;
 
-    kmpFiles.clear();
-    currentSoundIndex = -1;
+    allSounds.clear();
+    searchQuery.clear();
+    currentFilteredRow = -1;
     currentFolderName = folder.getFileName();
 
-    juce::Array<juce::File> found;
-    folder.findChildFiles(found, juce::File::findFiles, true, "*.kmp");
-
-    for (const auto& f : found)
-        kmpFiles.push_back(f);
-
-    std::sort(kmpFiles.begin(), kmpFiles.end(), [](const juce::File& a, const juce::File& b) {
+    // 1. Scan PA800 .PCM banks
+    juce::Array<juce::File> pcmFiles;
+    folder.findChildFiles(pcmFiles, juce::File::findFiles, true, "*.pcm");
+    std::vector<juce::File> sortedPcm;
+    for (const auto& f : pcmFiles) sortedPcm.push_back(f);
+    std::sort(sortedPcm.begin(), sortedPcm.end(), [](const juce::File& a, const juce::File& b) {
         return a.getFileName().compareNatural(b.getFileName()) < 0;
     });
 
-    if (!kmpFiles.empty()) {
-        selectSoundByIndex(0);
+    for (const auto& f : sortedPcm) {
+        auto samples = KorgParser::scanPA800PCM(f);
+        juce::String bank = f.getFileNameWithoutExtension();
+        for (const auto& s : samples) {
+            allSounds.push_back({ SoundEntry::Type::PA800_PCM, f, s.indexInFile, s.name, bank });
+        }
+    }
+
+    // 2. Scan standard (non-KORF) .KMP files
+    juce::Array<juce::File> kmpFiles;
+    folder.findChildFiles(kmpFiles, juce::File::findFiles, true, "*.kmp");
+    std::vector<juce::File> sortedKmp;
+    for (const auto& f : kmpFiles) sortedKmp.push_back(f);
+    std::sort(sortedKmp.begin(), sortedKmp.end(), [](const juce::File& a, const juce::File& b) {
+        return a.getFileName().compareNatural(b.getFileName()) < 0;
+    });
+
+    for (const auto& f : sortedKmp) {
+        if (!KorgParser::isKorfFile(f)) {
+            allSounds.push_back({ SoundEntry::Type::KMP, f, 0, f.getFileNameWithoutExtension(), "KMP" });
+        }
+    }
+
+    applySearchFilter("");
+
+    if (!filteredIndices.empty()) {
+        selectFilteredIndex(0);
     } else {
-        loadedInstrumentName = "No .KMP files in folder";
-        loadedZonesCount = 0;
+        loadedInstrumentName = "No .PCM or .KMP sounds found";
+        loadedDetails = "0 Sounds";
     }
 }
 
-bool KorgKMPEngineProcessor::selectSoundByIndex(int index) {
-    if (index < 0 || index >= static_cast<int>(kmpFiles.size()))
+void KorgKMPEngineProcessor::applySearchFilter(const juce::String& query) {
+    searchQuery = query.trim();
+    filteredIndices.clear();
+
+    for (int i = 0; i < static_cast<int>(allSounds.size()); ++i) {
+        const auto& s = allSounds[static_cast<size_t>(i)];
+        if (searchQuery.isEmpty()
+            || s.displayName.containsIgnoreCase(searchQuery)
+            || s.bankTag.containsIgnoreCase(searchQuery)) {
+            filteredIndices.push_back(i);
+        }
+    }
+
+    if (filteredIndices.empty()) {
+        currentFilteredRow = -1;
+    } else if (currentFilteredRow < 0 || currentFilteredRow >= static_cast<int>(filteredIndices.size())) {
+        currentFilteredRow = 0;
+    }
+}
+
+bool KorgKMPEngineProcessor::selectFilteredIndex(int filteredRow) {
+    if (filteredRow < 0 || filteredRow >= static_cast<int>(filteredIndices.size()))
         return false;
 
-    currentSoundIndex = index;
-    return loadKMPFile(kmpFiles[static_cast<size_t>(index)]);
+    currentFilteredRow = filteredRow;
+    int realIdx = filteredIndices[static_cast<size_t>(filteredRow)];
+    return loadSoundEntry(allSounds[static_cast<size_t>(realIdx)]);
 }
 
 void KorgKMPEngineProcessor::selectNextSound() {
-    if (kmpFiles.empty()) return;
-    int next = (currentSoundIndex + 1) % static_cast<int>(kmpFiles.size());
-    selectSoundByIndex(next);
+    if (filteredIndices.empty()) return;
+    int next = (currentFilteredRow + 1) % static_cast<int>(filteredIndices.size());
+    selectFilteredIndex(next);
 }
 
 void KorgKMPEngineProcessor::selectPreviousSound() {
-    if (kmpFiles.empty()) return;
-    int total = static_cast<int>(kmpFiles.size());
-    int prev = (currentSoundIndex - 1 + total) % total;
-    selectSoundByIndex(prev);
+    if (filteredIndices.empty()) return;
+    int total = static_cast<int>(filteredIndices.size());
+    int prev = (currentFilteredRow - 1 + total) % total;
+    selectFilteredIndex(prev);
 }
 
 void KorgKMPEngineProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) {
