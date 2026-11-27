@@ -3,7 +3,8 @@
 #include "PluginProcessor.h"
 #include <array>
 
-class KorgKMPEngineEditor : public juce::AudioProcessorEditor {
+class KorgKMPEngineEditor : public juce::AudioProcessorEditor,
+                             private juce::ListBoxModel {
 public:
     explicit KorgKMPEngineEditor(KorgKMPEngineProcessor&);
     ~KorgKMPEngineEditor() override = default;
@@ -11,12 +12,28 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
 
+    // ListBoxModel overrides
+    int getNumRows() override;
+    void paintListBoxItem(int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected) override;
+    void selectedRowsChanged(int lastRowSelected) override;
+
 private:
     void applyMaqamPreset(const std::array<float, 12>& cents);
     void refreshQuarterToneButtons();
+    void syncBrowserAndStatus();
 
     KorgKMPEngineProcessor& processor;
+    bool isUpdatingSelection = false;
 
+    // Left Sidebar: Sound Browser
+    juce::Label browserTitleLabel;
+    juce::Label folderNameLabel;
+    juce::TextButton openFolderButton { "OPEN FOLDER" };
+    juce::TextButton prevSoundButton { "<" };
+    juce::TextButton nextSoundButton { ">" };
+    juce::ListBox soundListBox;
+
+    // Main Top Header
     juce::TextButton loadButton { "LOAD .KMP" };
     juce::Label titleLabel;
     juce::Label statusLabel;
