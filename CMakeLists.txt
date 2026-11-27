@@ -1,12 +1,50 @@
-KorgKMPEngine/
-├── .github/
-│   └── workflows/
-│       └── build.yml
-├── Source/
-│   ├── KorgParser.h
-│   ├── OrientalSampler.h
-│   ├── PluginProcessor.h
-│   ├── PluginProcessor.cpp
-│   ├── PluginEditor.h
-│   └── PluginEditor.cpp
-└── CMakeLists.txt
+cmake_minimum_required(VERSION 3.22)
+project(KorgKMPEngine VERSION 0.2.0)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+include(FetchContent)
+FetchContent_Declare(
+    JUCE
+    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+    GIT_TAG 8.0.4
+)
+FetchContent_MakeAvailable(JUCE)
+
+juce_add_plugin(KorgKMPEngine
+    COMPANY_NAME "Mido Mazzika"
+    IS_SYNTH TRUE
+    NEEDS_MIDI_INPUT TRUE
+    NEEDS_MIDI_OUTPUT FALSE
+    IS_MIDI_EFFECT FALSE
+    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+    COPY_PLUGIN_AFTER_BUILD FALSE
+    PLUGIN_MANUFACTURER_CODE Mdmz
+    PLUGIN_CODE Kmp1
+    FORMATS VST3 Standalone
+    PRODUCT_NAME "Korg KMP Engine"
+)
+
+target_sources(KorgKMPEngine
+    PRIVATE
+        Source/PluginProcessor.cpp
+        Source/PluginEditor.cpp
+)
+
+target_compile_definitions(KorgKMPEngine
+    PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+)
+
+target_link_libraries(KorgKMPEngine
+    PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lto_flags
+        juce::juce_recommended_warning_flags
+)
