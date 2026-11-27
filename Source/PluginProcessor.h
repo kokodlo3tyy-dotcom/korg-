@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "OrientalSampler.h"
+#include <vector>
 
 class KorgKMPEngineProcessor : public juce::AudioProcessor {
 public:
@@ -31,12 +32,21 @@ public:
     void setStateInformation(const void*, int) override {}
 
     bool loadKMPFile(const juce::File& file);
+    bool loadSingleKMPWithSiblings(const juce::File& file);
+    void scanFolderForKMP(const juce::File& folder);
+    bool selectSoundByIndex(int index);
+    void selectNextSound();
+    void selectPreviousSound();
     void updateVoiceCount();
 
     OrientalEngineState engineState;
     juce::MidiKeyboardState keyboardState;
     juce::String loadedInstrumentName { "No KMP Loaded" };
     int loadedZonesCount { 0 };
+
+    std::vector<juce::File> kmpFiles;
+    int currentSoundIndex { -1 };
+    juce::String currentFolderName { "No Folder Selected" };
 
 private:
     juce::Synthesiser synth;
