@@ -3,6 +3,15 @@
 #include "OrientalSampler.h"
 #include <vector>
 
+struct SoundEntry {
+    enum class Type { KMP, PA800_PCM };
+    Type type = Type::KMP;
+    juce::File file;
+    int sampleIndex = 0;
+    juce::String displayName;
+    juce::String bankTag;
+};
+
 class KorgKMPEngineProcessor : public juce::AudioProcessor {
 public:
     KorgKMPEngineProcessor();
@@ -31,24 +40,28 @@ public:
     void getStateInformation(juce::MemoryBlock&) override {}
     void setStateInformation(const void*, int) override {}
 
-    bool loadKMPFile(const juce::File& file);
-    bool loadSingleKMPWithSiblings(const juce::File& file);
-    void scanFolderForKMP(const juce::File& folder);
-    bool selectSoundByIndex(int index);
+    bool loadSingleFile(const juce::File& file);
+    void scanFolder(const juce::File& folder);
+    void applySearchFilter(const juce::String& query);
+    bool selectFilteredIndex(int filteredRow);
     void selectNextSound();
     void selectPreviousSound();
     void updateVoiceCount();
 
     OrientalEngineState engineState;
     juce::MidiKeyboardState keyboardState;
-    juce::String loadedInstrumentName { "No KMP Loaded" };
-    int loadedZonesCount { 0 };
+    juce::String loadedInstrumentName { "No Sound Loaded" };
+    juce::String loadedDetails { "Open a .SET / PCM folder or .KMP file" };
 
-    std::vector<juce::File> kmpFiles;
-    int currentSoundIndex { -1 };
+    std::vector<SoundEntry> allSounds;
+    std::vector<int> filteredIndices;
+    int currentFilteredRow { -1 };
+    juce::String searchQuery;
     juce::String currentFolderName { "No Folder Selected" };
 
 private:
+    bool loadSoundEntry(const SoundEntry& entry);
+
     juce::Synthesiser synth;
     juce::CriticalSection synthLock;
 
